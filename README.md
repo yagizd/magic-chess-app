@@ -18,7 +18,6 @@ Bu oyun geleneksel satrançtan farklı bir kural setine sahiptir:
 - **Yerel (Local) Oyun Modu:** Tek bilgisayarda iki kişinin oynayabilmesi.
 
 ## 🚧 Yapılacaklar (Yakın Hedefler)
-- **Satranç Saati / Zaman Kontrolleri:** Bullet (1dk), Blitz (3dk) ve Rapid (10dk) gibi farklı süre modlarının eklenmesi.
 - **Chat Sistemi:** Oyun içi sohbet imkanı.
 - **Kopma/Bağlanma (Reconnection) Desteği:** İnternet kopmalarında maçtan düşmeden geri bağlanabilme süresi tanınması.
 
