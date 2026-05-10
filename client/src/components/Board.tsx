@@ -73,15 +73,23 @@ export function Board({
   }, [flipBoard]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent, row: number, col: number) => {
-    const piece = board[row][col];
-    if (!piece) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Prevent default to avoid double-firing touch/mouse events
+    if (e.button !== 0 && e.pointerType === 'mouse') return; // Only left clicks
     e.preventDefault();
+    const piece = board[row][col];
+    
+    if (!piece) {
+      // Clicked an empty square -> just trigger click, no drag
+      onSquareClick(row, col);
+      return;
+    }
+    
+    e.currentTarget.setPointerCapture(e.pointerId);
     setDragging({ row, col });
     setDragOver({ row, col });
     setGhostPos({ x: e.clientX, y: e.clientY });
     ghostRef.current = { piece, from: { row, col } };
-  }, [board]);
+  }, [board, onSquareClick]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragging) return;
@@ -172,8 +180,7 @@ export function Board({
               <div
                 key={`${row}-${col}`}
                 className={cls}
-                onClick={() => !dragging && onSquareClick(row, col)}
-                onPointerDown={piece ? (e) => handlePointerDown(e, row, col) : undefined}
+                onPointerDown={(e) => handlePointerDown(e, row, col)}
               >
                 {showPiece && (
                   <img
