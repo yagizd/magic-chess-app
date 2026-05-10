@@ -82,7 +82,10 @@ export default function App() {
           isCheck={state.isCheck}
           currentTurn={state.currentTurn}
           flipBoard={online.playerColor === 'black'}
+          premove={online.premove}
           onSquareClick={online.handleSquareClick}
+          onDragMove={online.handleDragMove}
+          onRightClick={online.handleRightClick}
         />
         <GameInfo
           state={state}
@@ -113,7 +116,10 @@ export default function App() {
         lastMove={local.lastMove}
         isCheck={local.gameState.isCheck}
         currentTurn={local.gameState.currentTurn}
+        premove={local.premove}
         onSquareClick={local.handleSquareClick}
+        onDragMove={local.handleDragMove}
+        onRightClick={local.handleRightClick}
       />
       <GameInfo
         state={local.gameState}

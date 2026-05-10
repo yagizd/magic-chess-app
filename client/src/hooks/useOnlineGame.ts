@@ -29,12 +29,15 @@ export interface OnlineGameApi {
   promotionPending: Move | null;
   lastMove: Move | null;
   roomError: string | null;
+  premove: Move | null;
   rematchRequestedByMe: boolean;
   rematchRequestedByOpponent: boolean;
   createRoom: (tc: TimeControl | null) => void;
   joinRoom: (id: string) => void;
   requestRematch: () => void;
   handleSquareClick: (row: number, col: number) => void;
+  handleDragMove: (from: Position, to: Position) => void;
+  handleRightClick: () => void;
   handlePromotion: (type: PromotionType) => void;
   resign: () => void;
   disconnect: () => void;
@@ -52,8 +55,13 @@ export function useOnlineGame(): OnlineGameApi {
   const [promotionPending, setPromotionPending] = useState<Move | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [timeSync, setTimeSync] = useState<TimeSync | null>(null);
+  const [premove, setPremove] = useState<Move | null>(null);
   const [rematchRequestedByMe, setRematchRequestedByMe] = useState(false);
   const [rematchRequestedByOpponent, setRematchRequestedByOpponent] = useState(false);
+
+  // Keep a ref to premove so we can access it inside the game:state listener
+  const premoveRef = useRef<Move | null>(null);
+  premoveRef.current = premove;
 
   const lastMove = useMemo<Move | null>(() => {
     if (!gameState) return null;
@@ -75,6 +83,8 @@ export function useOnlineGame(): OnlineGameApi {
       setRematchRequestedByMe(false);
       setRematchRequestedByOpponent(false);
       setTimeSync(null);
+      setPremove(null);
+      premoveRef.current = null;
       setStatus(color === 'black' ? 'playing' : 'waiting');
     });
 
@@ -91,7 +101,46 @@ export function useOnlineGame(): OnlineGameApi {
       setSelected(null);
       setValidMoves([]);
       setPromotionPending(null);
-      if (state.isCheckmate || state.isStalemate || state.isTimeout) setStatus('ended');
+      if (state.isCheckmate || state.isStalemate || state.isTimeout) {
+        setStatus('ended');
+        setPremove(null);
+        premoveRef.current = null;
+        return;
+      }
+
+      // Fire premove if it's now our turn
+      const pending = premoveRef.current;
+      if (pending) {
+        // We need playerColor here — read from closure won't be fresh, use a ref trick via the
+        // setter callback pattern — read from state inside set won't work for socket callbacks.
+        // Instead we rely on the playerColorRef below.
+        const col = playerColorRef.current;
+        if (col && state.currentTurn === col) {
+          // Validate the premove is still legal in the new state
+          const moves = getValidMoves(
+            state.board,
+            pending.from.row,
+            pending.from.col,
+            state.enPassantTarget,
+          );
+          const match = moves.find(
+            (m) => m.to.row === pending.to.row && m.to.col === pending.to.col,
+          );
+          if (match) {
+            const promo = match.promotion ? { ...match, promotion: undefined } : null;
+            if (promo) {
+              // Need promotion choice — show modal, keep premove for user to resolve
+              setSelected({ row: pending.from.row, col: pending.from.col });
+              setValidMoves(moves);
+              setPromotionPending(promo);
+            } else {
+              socket.emit('game:move', match);
+            }
+          }
+          setPremove(null);
+          premoveRef.current = null;
+        }
+      }
     });
 
     socket.on('game:time_sync', (sync: TimeSync) => {
@@ -108,57 +157,151 @@ export function useOnlineGame(): OnlineGameApi {
 
     socket.on('game:rematch_accepted', ({ color }: { color: Color }) => {
       setPlayerColor(color);
+      playerColorRef.current = color;
       setRematchRequestedByMe(false);
       setRematchRequestedByOpponent(false);
+      setPremove(null);
+      premoveRef.current = null;
       setStatus('playing');
     });
 
     return () => { socket.disconnect(); };
   }, []);
 
+  // Ref for playerColor so the socket listener can access the fresh value
+  const playerColorRef = useRef<Color | null>(null);
+  useEffect(() => { playerColorRef.current = playerColor; }, [playerColor]);
+
   const clearSelection = () => { setSelected(null); setValidMoves([]); };
 
-  const handleSquareClick = useCallback((row: number, col: number) => {
-    if (!gameState || !playerColor) return;
-    if (gameState.currentTurn !== playerColor) return;
-    if (status !== 'playing') return;
-    if (promotionPending) return;
+  /** Attempt to emit a move given from→to. Returns true if emitted (or queued as premove). */
+  const attemptMove = useCallback(
+    (
+      from: Position,
+      to: Position,
+      gs: GameState,
+      color: Color,
+    ): 'moved' | 'premoved' | 'invalid' => {
+      const isMyTurn = gs.currentTurn === color;
+      const piece = gs.board[from.row][from.col];
+      if (!piece || piece.color !== color) return 'invalid';
 
-    const piece = gameState.board[row][col];
-
-    if (selected) {
-      if (selected.row === row && selected.col === col) { clearSelection(); return; }
-
-      const matching = validMoves.filter(m => m.to.row === row && m.to.col === col);
-      if (matching.length > 0) {
-        const promo = matching.find(m => m.promotion);
-        if (promo) { setPromotionPending({ ...promo, promotion: undefined }); return; }
+      if (isMyTurn) {
+        const moves = getValidMoves(gs.board, from.row, from.col, gs.enPassantTarget);
+        const matching = moves.filter((m) => m.to.row === to.row && m.to.col === to.col);
+        if (matching.length === 0) return 'invalid';
+        const promo = matching.find((m) => m.promotion);
+        if (promo) {
+          setSelected(from);
+          setValidMoves(moves);
+          setPromotionPending({ ...promo, promotion: undefined });
+          return 'moved';
+        }
         socketRef.current?.emit('game:move', matching[0]);
+        return 'moved';
+      } else {
+        // Queue as premove (only one at a time)
+        setPremove({ from, to });
+        premoveRef.current = { from, to };
+        return 'premoved';
+      }
+    },
+    [],
+  );
+
+  const handleSquareClick = useCallback(
+    (row: number, col: number) => {
+      if (!gameState || !playerColor) return;
+      if (status !== 'playing') return;
+      if (promotionPending) return;
+
+      const piece = gameState.board[row][col];
+      const isMyTurn = gameState.currentTurn === playerColor;
+
+      // ── Cancel premove by clicking source again ──────────
+      if (premove && premove.from.row === row && premove.from.col === col) {
+        setPremove(null); clearSelection(); return;
+      }
+      if (premove && premove.to.row === row && premove.to.col === col) {
+        setPremove(null); clearSelection(); return;
+      }
+
+      // ── Standard selection / move ────────────────────────
+      if (selected) {
+        if (selected.row === row && selected.col === col) { clearSelection(); return; }
+
+        if (isMyTurn) {
+          const matching = validMoves.filter((m) => m.to.row === row && m.to.col === col);
+          if (matching.length > 0) {
+            const promo = matching.find((m) => m.promotion);
+            if (promo) { setPromotionPending({ ...promo, promotion: undefined }); return; }
+            socketRef.current?.emit('game:move', matching[0]);
+            clearSelection();
+            return;
+          }
+        } else {
+          // Not my turn — try setting premove
+          const fromPos = selected;
+          const toPos = { row, col };
+          const srcPiece = gameState.board[fromPos.row][fromPos.col];
+          if (srcPiece && srcPiece.color === playerColor) {
+            setPremove({ from: fromPos, to: toPos });
+            clearSelection();
+            return;
+          }
+        }
+
+        if (piece && piece.color === playerColor) {
+          setSelected({ row, col });
+          if (isMyTurn) {
+            setValidMoves(getValidMoves(gameState.board, row, col, gameState.enPassantTarget));
+          } else {
+            setValidMoves([]);
+          }
+          return;
+        }
         clearSelection();
         return;
       }
 
+      // Nothing selected
       if (piece && piece.color === playerColor) {
         setSelected({ row, col });
-        setValidMoves(getValidMoves(gameState.board, row, col, gameState.enPassantTarget));
-        return;
+        if (isMyTurn) {
+          setValidMoves(getValidMoves(gameState.board, row, col, gameState.enPassantTarget));
+        } else {
+          setValidMoves([]);
+        }
       }
+    },
+    [gameState, playerColor, selected, validMoves, promotionPending, status, premove],
+  );
+
+  const handleDragMove = useCallback(
+    (from: Position, to: Position) => {
+      if (!gameState || !playerColor) return;
+      if (status !== 'playing') return;
+      if (promotionPending) return;
       clearSelection();
-      return;
-    }
+      attemptMove(from, to, gameState, playerColor);
+    },
+    [gameState, playerColor, status, promotionPending, attemptMove],
+  );
 
-    if (piece && piece.color === playerColor) {
-      setSelected({ row, col });
-      setValidMoves(getValidMoves(gameState.board, row, col, gameState.enPassantTarget));
-    }
-  }, [gameState, playerColor, selected, validMoves, promotionPending, status]);
-
-  const handlePromotion = useCallback((promotion: PromotionType) => {
-    if (!promotionPending) return;
-    socketRef.current?.emit('game:move', { ...promotionPending, promotion });
-    setPromotionPending(null);
+  const handleRightClick = useCallback(() => {
+    setPremove(null);
     clearSelection();
-  }, [promotionPending]);
+  }, []);
+
+  const handlePromotion = useCallback(
+    (promotion: PromotionType) => {
+      if (!promotionPending) return;
+      socketRef.current?.emit('game:move', { ...promotionPending, promotion });
+      setPromotionPending(null);
+      clearSelection();
+    },
+    [promotionPending],
+  );
 
   const createRoom = useCallback((timeControl: TimeControl | null) => {
     setRoomError(null);
@@ -186,6 +329,8 @@ export function useOnlineGame(): OnlineGameApi {
     setPlayerColor(null);
     setGameState(null);
     setTimeSync(null);
+    setPremove(null);
+    premoveRef.current = null;
     setRematchRequestedByMe(false);
     setRematchRequestedByOpponent(false);
     clearSelection();
@@ -193,8 +338,9 @@ export function useOnlineGame(): OnlineGameApi {
 
   return {
     status, roomId, playerColor, gameState, timeSync, selected, validMoves,
-    promotionPending, lastMove, roomError,
+    promotionPending, lastMove, roomError, premove,
     rematchRequestedByMe, rematchRequestedByOpponent,
-    createRoom, joinRoom, requestRematch, handleSquareClick, handlePromotion, resign, disconnect,
+    createRoom, joinRoom, requestRematch, handleSquareClick, handleDragMove,
+    handleRightClick, handlePromotion, resign, disconnect,
   };
 }
