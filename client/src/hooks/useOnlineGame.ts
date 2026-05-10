@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { getValidMoves } from '@shared/rules';
 import type { Color, GameState, Move, Position, PromotionType, TimeControl } from '@shared/types';
 
-const SERVER = 'http://localhost:3001';
+const SERVER = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
 
 export interface TimeSync {
   whiteTimeMs: number;
