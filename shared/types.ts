@@ -43,6 +43,21 @@ export interface GameState {
   winner: Color | null;
 }
 
+export interface RecordedMove {
+  moveNumber: number;
+  color: Color;
+  piece: PieceType;
+  from: Position;
+  to: Position;
+  effectiveMovement: 'rook' | 'bishop' | 'knight' | 'natural';
+  captured?: PieceType;
+  isCheck: boolean;
+  isCheckmate: boolean;
+  promotion?: PromotionType;
+  notation: string;
+  timestamp: number;
+}
+
 export interface Room {
   id: string;
   white: string | null;

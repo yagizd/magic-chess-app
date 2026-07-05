@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { getValidMoves } from '@shared/rules';
-import type { Color, GameState, Move, Position, PromotionType, TimeControl } from '@shared/types';
+import { buildRecordedMove } from '@shared/notation';
+import type { Color, GameState, Move, Position, PromotionType, RecordedMove, TimeControl } from '@shared/types';
 
 const SERVER = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
 
@@ -30,6 +31,7 @@ export interface OnlineGameApi {
   lastMove: Move | null;
   roomError: string | null;
   premove: Move | null;
+  recordedMoves: RecordedMove[];
   rematchRequestedByMe: boolean;
   rematchRequestedByOpponent: boolean;
   createRoom: (tc: TimeControl | null) => void;
@@ -58,10 +60,16 @@ export function useOnlineGame(): OnlineGameApi {
   const [premove, setPremove] = useState<Move | null>(null);
   const [rematchRequestedByMe, setRematchRequestedByMe] = useState(false);
   const [rematchRequestedByOpponent, setRematchRequestedByOpponent] = useState(false);
+  const [recordedMoves, setRecordedMoves] = useState<RecordedMove[]>([]);
 
   // Keep a ref to premove so we can access it inside the game:state listener
   const premoveRef = useRef<Move | null>(null);
   premoveRef.current = premove;
+
+  // Keep a ref to the previous gameState so the game:state listener can diff
+  // against it to detect & record the newly-applied move.
+  const gameStateRef = useRef<GameState | null>(null);
+  gameStateRef.current = gameState;
 
   const lastMove = useMemo<Move | null>(() => {
     if (!gameState) return null;
@@ -85,6 +93,7 @@ export function useOnlineGame(): OnlineGameApi {
       setTimeSync(null);
       setPremove(null);
       premoveRef.current = null;
+      setRecordedMoves([]);
       setStatus(color === 'black' ? 'playing' : 'waiting');
     });
 
@@ -97,6 +106,13 @@ export function useOnlineGame(): OnlineGameApi {
     });
 
     socket.on('game:state', (state: GameState) => {
+      const prev = gameStateRef.current;
+      if (prev && state.moveHistory.length === prev.moveHistory.length + 1) {
+        const move = state.moveHistory[state.moveHistory.length - 1];
+        setRecordedMoves((rec) => [...rec, buildRecordedMove(prev, move, state)]);
+      } else if (state.moveHistory.length === 0) {
+        setRecordedMoves([]);
+      }
       setGameState(state);
       setSelected(null);
       setValidMoves([]);
@@ -145,6 +161,13 @@ export function useOnlineGame(): OnlineGameApi {
 
     socket.on('game:time_sync', (sync: TimeSync) => {
       setTimeSync(sync);
+    });
+
+    socket.on('game:move_rejected', ({ reason }: { reason: string }) => {
+      console.warn('Move rejected:', reason);
+      setPremove(null);
+      premoveRef.current = null;
+      clearSelection();
     });
 
     socket.on('opponent:left', () => {
@@ -333,12 +356,13 @@ export function useOnlineGame(): OnlineGameApi {
     premoveRef.current = null;
     setRematchRequestedByMe(false);
     setRematchRequestedByOpponent(false);
+    setRecordedMoves([]);
     clearSelection();
   }, []);
 
   return {
     status, roomId, playerColor, gameState, timeSync, selected, validMoves,
-    promotionPending, lastMove, roomError, premove,
+    promotionPending, lastMove, roomError, premove, recordedMoves,
     rematchRequestedByMe, rematchRequestedByOpponent,
     createRoom, joinRoom, requestRematch, handleSquareClick, handleDragMove,
     handleRightClick, handlePromotion, resign, disconnect,

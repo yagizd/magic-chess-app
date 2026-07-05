@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useCallback } from 'react';
 import type { Board as BoardType, Move, Piece, Position } from '@shared/types';
-import { findKing, getMovementType } from '@shared/rules';
+import { findKing } from '@shared/rules';
 
 interface Props {
   board: BoardType;
@@ -23,16 +23,6 @@ const PIECE_CODE: Record<Piece['type'], string> = {
 const BASE = 'https://lichess1.org/assets/piece/cburnett/';
 const pieceUrl = (color: Piece['color'], type: Piece['type']) =>
   `${BASE}${color === 'white' ? 'w' : 'b'}${PIECE_CODE[type]}.svg`;
-
-function colTintClass(piece: Piece | null, col: number): string {
-  if (!piece) return '';
-  if (piece.type !== 'rook' && piece.type !== 'bishop' && piece.type !== 'knight') return '';
-  const mv = getMovementType(piece, col);
-  if (mv === 'rook') return 'tint-rook';
-  if (mv === 'knight') return 'tint-knight';
-  if (mv === 'bishop') return 'tint-bishop';
-  return '';
-}
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
@@ -163,7 +153,6 @@ export function Board({
             const cls = [
               'square',
               light ? 'light' : 'dark',
-              colTintClass(piece, col),
               isSel ? 'selected' : '',
               !isSel && isLastFrom ? 'last-from' : '',
               !isSel && isLastTo   ? 'last-to'   : '',
@@ -200,7 +189,14 @@ export function Board({
                   />
                 )}
                 {isTarget && !isCapture && <span className="move-dot" />}
-                {isCapture && <span className="capture-ring" />}
+                {isCapture && (
+                  <span className="capture-corners">
+                    <span className="cc tl" />
+                    <span className="cc tr" />
+                    <span className="cc bl" />
+                    <span className="cc br" />
+                  </span>
+                )}
                 {isDragOver && !isCapture && targets.has(`${row},${col}`) && <span className="move-dot" />}
               </div>
             );

@@ -6,7 +6,7 @@ import {
   resetRoomForRematch,
   cleanupEmptyRoom,
 } from '../rooms.js';
-import { saveMatchResult } from '../db/supabase.js';
+import { saveGameResult } from '../db/supabase.js';
 import { getValidMoves, applyMove } from '../../../shared/rules.js';
 import type { Color, Move } from '../../../shared/types.js';
 import { getRoom, getAllRooms } from '../rooms.js';
@@ -43,7 +43,7 @@ export function startTimeoutChecker(io: Server) {
           lastMoveTimestamp: room.lastMoveTimestamp,
         });
         io.to(room.id).emit('game:state', room.gameState);
-        saveMatchResult(room, room.gameState.winner);
+        saveGameResult(room, room.gameState.winner, 'timeout');
       }
     }
   }, 1000);
@@ -56,8 +56,14 @@ export function registerGameHandler(io: Server, socket: Socket): void {
 
     const color = getColorInRoom(room, socket.id);
     if (!color) return;
-    if (room.gameState.currentTurn !== color) return;
-    if (room.gameState.isCheckmate || room.gameState.isStalemate) return;
+    if (room.gameState.currentTurn !== color) {
+      socket.emit('game:move_rejected', { reason: 'not_your_turn' });
+      return;
+    }
+    if (room.gameState.isCheckmate || room.gameState.isStalemate) {
+      socket.emit('game:move_rejected', { reason: 'game_over' });
+      return;
+    }
 
     // Server-side validation — shared rule engine
     const legal = getValidMoves(
@@ -74,6 +80,7 @@ export function registerGameHandler(io: Server, socket: Socket): void {
     );
     if (!isLegal) {
       console.warn(`[game] illegal move from ${socket.id}`);
+      socket.emit('game:move_rejected', { reason: 'invalid_move' });
       return;
     }
 
@@ -83,11 +90,17 @@ export function registerGameHandler(io: Server, socket: Socket): void {
       const elapsed = now - room.lastMoveTimestamp;
       if (color === 'white') {
         room.whiteTimeMs -= elapsed;
-        if (room.whiteTimeMs <= 0) return; // Time out should be handled by interval, but prevent move if already out
+        if (room.whiteTimeMs <= 0) {
+          socket.emit('game:move_rejected', { reason: 'time_expired' });
+          return; // Time out should be handled by interval, but prevent move if already out
+        }
         room.whiteTimeMs += room.timeControl.increment * 1000;
       } else {
         room.blackTimeMs -= elapsed;
-        if (room.blackTimeMs <= 0) return;
+        if (room.blackTimeMs <= 0) {
+          socket.emit('game:move_rejected', { reason: 'time_expired' });
+          return;
+        }
         room.blackTimeMs += room.timeControl.increment * 1000;
       }
       room.lastMoveTimestamp = now;
@@ -105,7 +118,7 @@ export function registerGameHandler(io: Server, socket: Socket): void {
     }
 
     if (newState.isCheckmate || newState.isStalemate) {
-      saveMatchResult(room, newState.winner);
+      saveGameResult(room, newState.winner, newState.isCheckmate ? 'checkmate' : 'draw');
     }
   });
 
@@ -125,7 +138,7 @@ export function registerGameHandler(io: Server, socket: Socket): void {
     io.to(room.id).emit('game:state', newState);
     io.to(room.id).emit('game:resigned', { color });
 
-    saveMatchResult(room, winner);
+    saveGameResult(room, winner, 'resign');
   });
 
   socket.on('game:rematch_request', () => {

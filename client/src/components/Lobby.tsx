@@ -78,12 +78,7 @@ export function Lobby({
         <div className="time-controls">
           {Object.entries(TIME_CONTROLS).map(([category, controls]) => (
             <div key={category} className="tc-category">
-              <h3 className="tc-category-title">
-                {category === 'Bullet' && '🚀 '}
-                {category === 'Blitz' && '⚡ '}
-                {category === 'Rapid' && '⏱️ '}
-                {category}
-              </h3>
+              <h3 className="tc-category-title">{category}</h3>
               <div className="tc-grid">
                 {controls.map(tc => (
                   <button
